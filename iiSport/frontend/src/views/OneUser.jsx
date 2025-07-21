@@ -2,14 +2,21 @@ import React, { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import NavBar from '../components/NavBar';
 import { Link } from 'react-router-dom';
+import dayjs from 'dayjs';
+import axios from 'axios';
+
+
 
 
 const OneUser = () => {
+  const loggedUser = JSON.parse(localStorage.getItem("connectedUser"));
   const { id } = useParams(); 
   const [user, setUser] = useState(null);
   const [error, setError] = useState('');
   const [image, setImage] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
+  const [pastEvents, setPastEvents] = useState([]);
+  const [futureEvents, setFutureEvents] = useState([]);
 
   useEffect(() => {
     fetch(`http://localhost:8080/api/users/${id}`)
@@ -33,6 +40,29 @@ const OneUser = () => {
     reader.readAsDataURL(file);
   }
 };
+
+useEffect(() => {
+    // Fetch all events without filtering by user
+    axios.get(`http://localhost:8080/api/users/${loggedUser.id}/events`)
+      .then(res => {
+        console.log("✅ All events fetched:", res.data);
+        const allEvents = res.data;
+        setPastEvents(allEvents);
+        const today = dayjs().format('YYYY-MM-DD');
+
+        const pastList = allEvents.filter(event =>
+        dayjs(`${event.date}T${event.time}`).isBefore(today)
+        );
+
+        const futureList = allEvents.filter(event =>
+          dayjs(event.date).isAfter(today)
+        );
+
+        setPastEvents(pastList);
+        setFutureEvents(futureList);
+      })
+      .catch(err => console.error(err));
+  }, []);
 
 
   return (
@@ -65,6 +95,27 @@ const OneUser = () => {
           </div>
         </div>
       )}
+      <div className='mt-3'>
+        <h6>Event History</h6>
+        <ul>
+          {pastEvents.map((event, idx) => (
+          <li key={idx}>{event.eventName}</li>
+          ))}
+        </ul>
+
+        <h6>Future</h6>
+        <ul>
+          {futureEvents.map((event, idx) => (
+          <li key={idx}>{event.eventName}</li>
+          ))}
+        </ul>
+
+      </div>
+      
+      
+      
+
+
     </div>
   );
 };
