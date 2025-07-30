@@ -80,7 +80,7 @@ const LogReg = () => {
 
   return (
     <div className="container mt-5">
-      <h1 className="text-center mb-3 text-warning">iSport</h1>
+      <h1 className="text-center mb-3 gradient-shine">iSport</h1>
       <h6 className="text-center mb-5">Free Pickup Game Finder and Organizer</h6>
 
       <div className="row justify-content-center">

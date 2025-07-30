@@ -1,0 +1,23 @@
+.gradient-shine {
+  font-weight: 900;
+  font-size: 3rem;
+  background: linear-gradient(270deg, #ff6a00, #ee0979, #ff6a00);
+  background-size: 600% 600%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: gradientMove 8s ease infinite;
+  position: relative;
+
+}
+
+@keyframes gradientMove {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
