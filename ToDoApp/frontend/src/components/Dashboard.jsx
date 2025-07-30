@@ -1,24 +1,101 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
+import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
-import Navbar from '../views/Navbar';
 
 const Dashboard = () => {
   const [activeWidget, setActiveWidget] = useState(null);
+  const [tasks, setTasks] = useState({
+    progress: [],
+    completed: [],
+    tostart: []
+  });
   const loggedUser = JSON.parse(localStorage.getItem("connectedUser"));
   const navigate = useNavigate();
 
-  // Sample task data
-  const taskData = {
-    progress: ['Fix login page', 'Update user dashboard'],
-    completed: ['Design logo', 'Setup database'],
-    tostart: ['Write documentation', 'Test mobile view']
+  // Fetch tasks from backend
+  useEffect(() => {
+    const fetchTasks = async () => {
+      try {
+        const token = localStorage.getItem("token");
+        const response = await axios.get('http://localhost:5000/api/tasks', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        
+        // Organize tasks by status
+        const organizedTasks = {
+          progress: response.data.filter(task => task.status === 'In Progress'),
+          completed: response.data.filter(task => task.status === 'Completed'),
+          tostart: response.data.filter(task => task.status === 'To Start')
+        };
+        setTasks(organizedTasks);
+      } catch (error) {
+        console.error("Error fetching tasks:", error);
+      }
+    };
+
+    fetchTasks();
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem("connectedUser");
+    localStorage.removeItem("token");
+    navigate('/login');
+  };
+
+  const handleTaskUpdate = async (taskId, newStatus) => {
+    try {
+      const token = localStorage.getItem("token");
+      await axios.put(`http://localhost:5000/api/tasks/${taskId}`, 
+        { status: newStatus },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      // Refresh tasks after update
+      const response = await axios.get('http://localhost:5000/api/tasks', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const organizedTasks = {
+        progress: response.data.filter(task => task.status === 'In Progress'),
+        completed: response.data.filter(task => task.status === 'Completed'),
+        tostart: response.data.filter(task => task.status === 'To Start')
+      };
+      setTasks(organizedTasks);
+    } catch (error) {
+      console.error("Error updating task:", error);
+    }
+  };
+
+  const handleTaskDelete = async (taskId) => {
+    try {
+      const token = localStorage.getItem("token");
+      await axios.delete(`http://localhost:5000/api/tasks/${taskId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      // Refresh tasks after delete
+      const response = await axios.get('http://localhost:5000/api/tasks', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const organizedTasks = {
+        progress: response.data.filter(task => task.status === 'In Progress'),
+        completed: response.data.filter(task => task.status === 'Completed'),
+        tostart: response.data.filter(task => task.status === 'To Start')
+      };
+      setTasks(organizedTasks);
+    } catch (error) {
+      console.error("Error deleting task:", error);
+    }
   };
 
   return (
     <DashboardContainer>
       {/* Header */}
-      <Navbar />
+      <HeaderWidget>
+        <WelcomeText>Welcome, {loggedUser?.name}</WelcomeText>
+        <LogoutButton onClick={handleLogout}>
+          Logout
+        </LogoutButton>
+      </HeaderWidget>
+
       <BoardTitle>
         <h3>My Task Board</h3>
         <p>Tasks to keep organised</p>
@@ -30,21 +107,21 @@ const Dashboard = () => {
           onClick={() => setActiveWidget('progress')}
           color="#f9d56e"
         >
-          🍩 Tasks in Progress
+          🍩 Tasks in Progress ({tasks.progress.length})
         </ActionButton>
 
         <ActionButton 
           onClick={() => setActiveWidget('completed')}
           color="#7bd389"
         >
-          🌱 Completed Tasks
+          🌱 Completed Tasks ({tasks.completed.length})
         </ActionButton>
 
         <ActionButton 
           onClick={() => setActiveWidget('tostart')}
           color="#ec7e7f"
         >
-          ☕ Tasks to Start
+          ☕ Tasks to Start ({tasks.tostart.length})
         </ActionButton>
 
         <ActionButton 
@@ -62,14 +139,36 @@ const Dashboard = () => {
             <CloseButton onClick={() => setActiveWidget(null)}>×</CloseButton>
             
             {activeWidget === 'create' ? (
-              <CreateTaskWidget onClose={() => setActiveWidget(null)} />
+              <CreateTaskWidget 
+                onClose={() => setActiveWidget(null)} 
+                setTasks={setTasks}
+              />
             ) : (
               <TaskListWidget>
                 <h3>{activeWidget === 'progress' ? 'In Progress' : 
                      activeWidget === 'completed' ? 'Completed' : 'To Start'} Tasks</h3>
                 <ul>
-                  {taskData[activeWidget].map((task, index) => (
-                    <TaskItem key={index}>{task}</TaskItem>
+                  {tasks[activeWidget].map((task) => (
+                    <TaskItem key={task._id}>
+                      <TaskTitle>{task.title}</TaskTitle>
+                      <TaskDescription>{task.description}</TaskDescription>
+                      <TaskDue>Due: {new Date(task.dueDate).toLocaleDateString()}</TaskDue>
+                      <TaskPriority>Priority: {task.priority}</TaskPriority>
+                      <TaskActions>
+                        {activeWidget !== 'completed' && (
+                          <CompleteButton 
+                            onClick={() => handleTaskUpdate(task._id, 'Completed')}
+                          >
+                            Mark Complete
+                          </CompleteButton>
+                        )}
+                        <DeleteButton 
+                          onClick={() => handleTaskDelete(task._id)}
+                        >
+                          Delete
+                        </DeleteButton>
+                      </TaskActions>
+                    </TaskItem>
                   ))}
                 </ul>
               </TaskListWidget>
@@ -82,7 +181,7 @@ const Dashboard = () => {
 };
 
 // Create Task Widget Component
-const CreateTaskWidget = ({ onClose }) => {
+const CreateTaskWidget = ({ onClose, setTasks }) => {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [dueDate, setDueDate] = useState("");
@@ -93,21 +192,16 @@ const CreateTaskWidget = ({ onClose }) => {
   const validateForm = () => {
     const newErrors = {};
     
-    // Title validation
     if (!title.trim()) {
       newErrors.title = "Title is required";
     } else if (title.length < 3) {
       newErrors.title = "Title must be at least 3 characters";
     }
     
-    // Description validation
     if (!description.trim()) {
       newErrors.description = "Description is required";
-    } else if (description.length < 3) {
-      newErrors.description = "Description must be at least 3 characters";
     }
     
-    // Due date validation
     if (!dueDate) {
       newErrors.dueDate = "Due date is required";
     } else if (new Date(dueDate) < new Date()) {
@@ -118,33 +212,47 @@ const CreateTaskWidget = ({ onClose }) => {
     return Object.keys(newErrors).length === 0;
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validateForm()) return;
 
-    const taskData = {
-      title,
-      description,
-      dueDate,
-      priority,
-      status: "To Start"
-    };
+    try {
+      const token = localStorage.getItem("token");
+      const response = await axios.post('http://localhost:5000/api/tasks', {
+        title,
+        description,
+        dueDate,
+        priority,
+        status: "To Start"
+      }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
 
-    // Here you would make your API call
-    console.log("Submitting task:", taskData);
-    
-    // Simulate successful submission
-    setSuccess(true);
-    setTimeout(() => {
-      setSuccess(false);
-      onClose();
-      // Reset form
-      setTitle("");
-      setDescription("");
-      setDueDate("");
-      setPriority("Medium");
-      setErrors({});
-    }, 1500);
+      // Update tasks state
+      const tasksResponse = await axios.get('http://localhost:5000/api/tasks', {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const organizedTasks = {
+        progress: tasksResponse.data.filter(task => task.status === 'In Progress'),
+        completed: tasksResponse.data.filter(task => task.status === 'Completed'),
+        tostart: tasksResponse.data.filter(task => task.status === 'To Start')
+      };
+      setTasks(organizedTasks);
+
+      setSuccess(true);
+      setTimeout(() => {
+        setSuccess(false);
+        onClose();
+        setTitle("");
+        setDescription("");
+        setDueDate("");
+        setPriority("Medium");
+        setErrors({});
+      }, 1500);
+    } catch (error) {
+      console.error("Error creating task:", error);
+      setErrors({ submit: "Failed to create task. Please try again." });
+    }
   };
 
   return (
@@ -154,6 +262,8 @@ const CreateTaskWidget = ({ onClose }) => {
         <SuccessMessage>✅ Task created successfully!</SuccessMessage>
       ) : (
         <form onSubmit={handleSubmit}>
+          {errors.submit && <ErrorText style={{ textAlign: 'center' }}>{errors.submit}</ErrorText>}
+          
           <FormGroup>
             <label>Task Title*</label>
             <FormInput
@@ -365,9 +475,57 @@ const TaskListWidget = styled.div`
 `;
 
 const TaskItem = styled.li`
-  padding: 0.75rem 0;
+  padding: 1rem;
   border-bottom: 1px solid #eee;
-  font-size: 1.1rem;
+  margin-bottom: 1rem;
+`;
+
+const TaskTitle = styled.h4`
+  margin: 0 0 0.5rem;
+  color: #2c4766;
+`;
+
+const TaskDescription = styled.p`
+  margin: 0 0 0.5rem;
+  color: #666;
+`;
+
+const TaskDue = styled.p`
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  color: #888;
+`;
+
+const TaskPriority = styled.p`
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  color: #888;
+`;
+
+const TaskActions = styled.div`
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+`;
+
+const CompleteButton = styled.button`
+  background: #7bd389;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
+`;
+
+const DeleteButton = styled.button`
+  background: #ec7e7f;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9rem;
 `;
 
 const TaskFormContainer = styled.div`
