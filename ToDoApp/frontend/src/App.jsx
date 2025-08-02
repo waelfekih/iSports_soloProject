@@ -6,11 +6,12 @@ import Create from "./components/Create";
 import Progress from "./components/Progress";
 import Completed from "./components/Completed";
 import Tostart from "./components/Tostart";
+import GetStarted from "./components/GetStarted";
 
 function App() {
   return (
       <Routes>
-        <Route path="/" element={<Register />} />
+        <Route path="/" element={<GetStarted />} />
         <Route path="/login" element={<Login />} />
         <Route path="/register" element={<Register />} />
         <Route path="/dashboard" element={<Dashboard />} />

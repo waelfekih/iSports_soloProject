@@ -2,35 +2,76 @@ import React, { useState, useEffect } from 'react';
 import styled from 'styled-components';
 import axios from 'axios';
 import { useNavigate } from 'react-router-dom';
+import Navbar from '../views/Navbar';
+import Footer from './Footer';
+
+// Create axios instance with interceptors
+const api = axios.create({
+  baseURL: 'http://localhost:8000/api'
+});
+
+// Add request interceptor
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem("token");
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+}, error => {
+  return Promise.reject(error);
+});
+
+// Add response interceptor
+api.interceptors.response.use(
+  response => response,
+  error => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem("token");
+      localStorage.removeItem("connectedUser");
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  }
+);
 
 const Dashboard = () => {
   const [activeWidget, setActiveWidget] = useState(null);
   const [tasks, setTasks] = useState({
     progress: [],
     completed: [],
-    tostart: []
+    pending: []
   });
+  const [editingTask, setEditingTask] = useState(null);
+  const [viewingTask, setViewingTask] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
   const loggedUser = JSON.parse(localStorage.getItem("connectedUser"));
   const navigate = useNavigate();
+
+  // Verify token on initial load
+  useEffect(() => {
+    const token = localStorage.getItem("token");
+    if (!token) {
+      handleLogout();
+    }
+  }, []);
 
   // Fetch tasks from backend
   useEffect(() => {
     const fetchTasks = async () => {
       try {
-        const token = localStorage.getItem("token");
-        const response = await axios.get('http://localhost:5000/api/tasks', {
-          headers: { Authorization: `Bearer ${token}` }
-        });
+        setIsLoading(true);
+        const response = await api.get('/tasks');
         
-        // Organize tasks by status
         const organizedTasks = {
           progress: response.data.filter(task => task.status === 'In Progress'),
           completed: response.data.filter(task => task.status === 'Completed'),
-          tostart: response.data.filter(task => task.status === 'To Start')
+          pending: response.data.filter(task => task.status === 'Pending')
         };
         setTasks(organizedTasks);
       } catch (error) {
         console.error("Error fetching tasks:", error);
+      } finally {
+        setIsLoading(false);
       }
     };
 
@@ -43,299 +84,418 @@ const Dashboard = () => {
     navigate('/login');
   };
 
-  const handleTaskUpdate = async (taskId, newStatus) => {
+  const handleTaskStatusUpdate = async (taskId, newStatus) => {
     try {
-      const token = localStorage.getItem("token");
-      await axios.put(`http://localhost:5000/api/tasks/${taskId}`, 
-        { status: newStatus },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      // Refresh tasks after update
-      const response = await axios.get('http://localhost:5000/api/tasks', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const organizedTasks = {
-        progress: response.data.filter(task => task.status === 'In Progress'),
-        completed: response.data.filter(task => task.status === 'Completed'),
-        tostart: response.data.filter(task => task.status === 'To Start')
-      };
-      setTasks(organizedTasks);
+      if (!taskId) throw new Error("Task ID is required");
+      
+      const response = await api.put(`/task/${taskId}`, { status: newStatus });
+      
+      if (response.status === 200) {
+        await refreshTasks();
+        return response.data;
+      }
+      throw new Error(response.data.message || "Failed to update task status");
     } catch (error) {
-      console.error("Error updating task:", error);
+      console.error("Error updating task status:", error);
+      if (error.response?.status === 404) {
+        await refreshTasks();
+      }
+      throw error;
     }
   };
 
   const handleTaskDelete = async (taskId) => {
     try {
-      const token = localStorage.getItem("token");
-      await axios.delete(`http://localhost:5000/api/tasks/${taskId}`, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      // Refresh tasks after delete
-      const response = await axios.get('http://localhost:5000/api/tasks', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
+      if (!taskId) throw new Error("Task ID is required");
+      
+      if (!window.confirm('Are you sure you want to delete this task?')) {
+        return;
+      }
+
+      const response = await api.delete(`/task/${taskId}`);
+      
+      if (response.status === 200) {
+        await refreshTasks();
+        if (viewingTask?._id === taskId) {
+          setViewingTask(null);
+        }
+        alert('Task deleted successfully');
+      } else {
+        throw new Error(response.data.message || "Failed to delete task");
+      }
+    } catch (error) {
+      console.error("Error deleting task:", error);
+      alert(`Error: ${error.response?.data?.message || error.message}`);
+      
+      if (error.response?.status === 404) {
+        await refreshTasks();
+      }
+    }
+  };
+
+  const handleTaskUpdate = async (taskId, updateData) => {
+    try {
+      if (!taskId) throw new Error("Task ID is required");
+      if (!updateData || Object.keys(updateData).length === 0) {
+        throw new Error("Update data is required");
+      }
+
+      const response = await api.put(`/task/${taskId}`, updateData);
+      
+      if (response.status === 200) {
+        await refreshTasks();
+        return response.data;
+      }
+      throw new Error(response.data.message || "Failed to update task");
+    } catch (error) {
+      console.error("Error updating task:", error);
+      throw error;
+    }
+  };
+
+  const refreshTasks = async () => {
+    try {
+      const response = await api.get('/tasks');
       const organizedTasks = {
         progress: response.data.filter(task => task.status === 'In Progress'),
         completed: response.data.filter(task => task.status === 'Completed'),
-        tostart: response.data.filter(task => task.status === 'To Start')
+        pending: response.data.filter(task => task.status === 'Pending')
       };
       setTasks(organizedTasks);
     } catch (error) {
-      console.error("Error deleting task:", error);
+      console.error("Error refreshing tasks:", error);
+      throw error;
     }
+  };
+
+  const openEditWidget = (task) => {
+    setEditingTask(task);
+    setActiveWidget('edit');
+  };
+
+  const openViewWidget = async (taskId) => {
+    try {
+      const response = await api.get(`/task/${taskId}`);
+      setViewingTask(response.data);
+      setActiveWidget('view');
+    } catch (error) {
+      console.error("Error fetching task details:", error);
+      alert(`Error: ${error.response?.data?.message || error.message}`);
+    }
+  };
+
+  const formatDate = (dateString) => {
+    if (!dateString) return 'N/A';
+    const options = { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' };
+    return new Date(dateString).toLocaleDateString('en-CA', options);
   };
 
   return (
     <DashboardContainer>
-      {/* Header */}
-      <HeaderWidget>
-        <WelcomeText>Welcome, {loggedUser?.name}</WelcomeText>
-        <LogoutButton onClick={handleLogout}>
-          Logout
-        </LogoutButton>
-      </HeaderWidget>
+      <Navbar />
 
-      <BoardTitle>
+      <BoardTitle className='mt-3'>
         <h3>My Task Board</h3>
         <p>Tasks to keep organised</p>
       </BoardTitle>
 
-      {/* Action Buttons */}
       <ButtonsContainer>
-        <ActionButton 
-          onClick={() => setActiveWidget('progress')}
-          color="#f9d56e"
-        >
-          🍩 Tasks in Progress ({tasks.progress.length})
+        <ActionButton onClick={() => setActiveWidget('progress')} color="#f9d56e">
+          🍩 In Progress ({tasks.progress.length})
         </ActionButton>
-
-        <ActionButton 
-          onClick={() => setActiveWidget('completed')}
-          color="#7bd389"
-        >
-          🌱 Completed Tasks ({tasks.completed.length})
+        <ActionButton onClick={() => setActiveWidget('completed')} color="#7bd389">
+          🌱 Completed ({tasks.completed.length})
         </ActionButton>
-
-        <ActionButton 
-          onClick={() => setActiveWidget('tostart')}
-          color="#ec7e7f"
-        >
-          ☕ Tasks to Start ({tasks.tostart.length})
+        <ActionButton onClick={() => setActiveWidget('pending')} color="#ec7e7f">
+          ☕ Pending ({tasks.pending.length})
         </ActionButton>
-
-        <ActionButton 
-          onClick={() => setActiveWidget('create')}
-          color="#2c4766"
-        >
+        <ActionButton onClick={() => setActiveWidget('create')} color="#2c4766">
           ➕ Add New Task
         </ActionButton>
       </ButtonsContainer>
 
-      {/* Widget Overlays */}
       {activeWidget && (
-        <WidgetOverlay onClick={() => setActiveWidget(null)}>
+        <WidgetOverlay onClick={() => {
+          setActiveWidget(null);
+          setEditingTask(null);
+          setViewingTask(null);
+        }}>
           <WidgetPanel onClick={(e) => e.stopPropagation()}>
-            <CloseButton onClick={() => setActiveWidget(null)}>×</CloseButton>
+            <CloseButton onClick={() => {
+              setActiveWidget(null);
+              setEditingTask(null);
+              setViewingTask(null);
+            }}>×</CloseButton>
             
             {activeWidget === 'create' ? (
-              <CreateTaskWidget 
+              <TaskFormWidget 
                 onClose={() => setActiveWidget(null)} 
-                setTasks={setTasks}
+                refreshTasks={refreshTasks}
+                mode="create"
+              />
+            ) : activeWidget === 'edit' ? (
+              <TaskFormWidget 
+                onClose={() => {
+                  setActiveWidget(null);
+                  setEditingTask(null);
+                }}
+                refreshTasks={refreshTasks}
+                mode="edit"
+                task={editingTask}
+              />
+            ) : activeWidget === 'view' ? (
+              <TaskDetailsWidget 
+                task={viewingTask}
+                formatDate={formatDate}
+                onClose={() => {
+                  setActiveWidget(null);
+                  setViewingTask(null);
+                }}
+                onEdit={() => {
+                  setEditingTask(viewingTask);
+                  setActiveWidget('edit');
+                }}
+                onDelete={handleTaskDelete}
               />
             ) : (
               <TaskListWidget>
                 <h3>{activeWidget === 'progress' ? 'In Progress' : 
-                     activeWidget === 'completed' ? 'Completed' : 'To Start'} Tasks</h3>
-                <ul>
-                  {tasks[activeWidget].map((task) => (
-                    <TaskItem key={task._id}>
-                      <TaskTitle>{task.title}</TaskTitle>
-                      <TaskDescription>{task.description}</TaskDescription>
-                      <TaskDue>Due: {new Date(task.dueDate).toLocaleDateString()}</TaskDue>
-                      <TaskPriority>Priority: {task.priority}</TaskPriority>
-                      <TaskActions>
-                        {activeWidget !== 'completed' && (
-                          <CompleteButton 
-                            onClick={() => handleTaskUpdate(task._id, 'Completed')}
+                     activeWidget === 'completed' ? 'Completed' : 'Pending'} Tasks</h3>
+                {isLoading ? (
+                  <LoadingMessage>Loading tasks...</LoadingMessage>
+                ) : tasks[activeWidget].length === 0 ? (
+                  <EmptyMessage>No tasks in this category</EmptyMessage>
+                ) : (
+                  <ul>
+                    {tasks[activeWidget].map((task) => (
+                      <TaskItem key={task._id}>
+                        <TaskTitle>{task.title}</TaskTitle>
+                        <TaskContent>{task.content.substring(0, 50)}...</TaskContent>
+                        <TaskMeta>
+                          <span>Priority: {task.priority}</span>
+                          <span>Status: {task.status}</span>
+                        </TaskMeta>
+                        <TaskActions>
+                          <ActionButton color="#3a86ff" onClick={() => openViewWidget(task._id)}>
+                            Details
+                          </ActionButton>
+                          <ActionButton color="#2c4766" onClick={() => openEditWidget(task)}>
+                            Edit
+                          </ActionButton>
+                          {task.status !== 'Completed' && (
+                            <ActionButton 
+                              color="#7bd389" 
+                              onClick={() => handleTaskStatusUpdate(task._id, 'Completed')}
+                            >
+                              Complete
+                            </ActionButton>
+                          )}
+                          <ActionButton 
+                            color="#ec7e7f" 
+                            onClick={() => handleTaskDelete(task._id)}
                           >
-                            Mark Complete
-                          </CompleteButton>
-                        )}
-                        <DeleteButton 
-                          onClick={() => handleTaskDelete(task._id)}
-                        >
-                          Delete
-                        </DeleteButton>
-                      </TaskActions>
-                    </TaskItem>
-                  ))}
-                </ul>
+                            Delete
+                          </ActionButton>
+                        </TaskActions>
+                      </TaskItem>
+                    ))}
+                  </ul>
+                )}
               </TaskListWidget>
             )}
           </WidgetPanel>
         </WidgetOverlay>
       )}
+      <Footer/>
     </DashboardContainer>
   );
 };
 
-// Create Task Widget Component
-const CreateTaskWidget = ({ onClose, setTasks }) => {
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
-  const [dueDate, setDueDate] = useState("");
-  const [priority, setPriority] = useState("Medium");
-  const [errors, setErrors] = useState({});
-  const [success, setSuccess] = useState(false);
+const TaskDetailsWidget = ({ task, formatDate, onClose, onEdit, onDelete }) => {
+  return (
+    <TaskDetailsContainer>
+      <h3>Task Details</h3>
+      
+      <DetailGroup>
+        <DetailLabel>Title:</DetailLabel>
+        <DetailValue>{task.title}</DetailValue>
+      </DetailGroup>
+      
+      <DetailGroup>
+        <DetailLabel>Content:</DetailLabel>
+        <DetailContent>{task.content}</DetailContent>
+      </DetailGroup>
+      
+      <DetailGroup>
+        <DetailLabel>Priority:</DetailLabel>
+        <DetailValue>{task.priority}</DetailValue>
+      </DetailGroup>
+      
+      <DetailGroup>
+        <DetailLabel>Status:</DetailLabel>
+        <DetailValue>{task.status}</DetailValue>
+      </DetailGroup>
+      
+      <DetailGroup>
+        <DetailLabel>Created At:</DetailLabel>
+        <DetailValue>{formatDate(task.createdAt)}</DetailValue>
+      </DetailGroup>
+      
+      <DetailGroup>
+        <DetailLabel>Last Updated:</DetailLabel>
+        <DetailValue>{formatDate(task.updatedAt)}</DetailValue>
+      </DetailGroup>
+      
+      <DetailActions>
+        <ActionButton color="#2c4766" onClick={onEdit}>
+          Edit Task
+        </ActionButton>
+        <ActionButton color="#ec7e7f" onClick={() => onDelete(task._id)}>
+          Delete Task
+        </ActionButton>
+        <ActionButton color="#666" onClick={onClose}>
+          Close
+        </ActionButton>
+      </DetailActions>
+    </TaskDetailsContainer>
+  );
+};
 
-  const validateForm = () => {
-    const newErrors = {};
-    
-    if (!title.trim()) {
-      newErrors.title = "Title is required";
-    } else if (title.length < 3) {
-      newErrors.title = "Title must be at least 3 characters";
-    }
-    
-    if (!description.trim()) {
-      newErrors.description = "Description is required";
-    }
-    
-    if (!dueDate) {
-      newErrors.dueDate = "Due date is required";
-    } else if (new Date(dueDate) < new Date()) {
-      newErrors.dueDate = "Due date must be in the future";
-    }
-    
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
+const TaskFormWidget = ({ onClose, refreshTasks, mode, task }) => {
+  const [formData, setFormData] = useState({
+    title: mode === 'edit' ? task.title : "",
+    content: mode === 'edit' ? task.content : "",
+    priority: mode === 'edit' ? task.priority : "Medium",
+    status: mode === 'edit' ? task.status : "Pending"
+  });
+  const [errors, setErrors] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!validateForm()) return;
+    setSubmitError(null);
+    
+    // Validate form
+    const newErrors = {};
+    if (!formData.title.trim()) newErrors.title = "Title is required";
+    if (!formData.content.trim()) newErrors.content = "Content is required";
+    setErrors(newErrors);
+    
+    if (Object.keys(newErrors).length > 0) return;
 
+    setIsSubmitting(true);
+    
     try {
-      const token = localStorage.getItem("token");
-      const response = await axios.post('http://localhost:5000/api/tasks', {
-        title,
-        description,
-        dueDate,
-        priority,
-        status: "To Start"
-      }, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-
-      // Update tasks state
-      const tasksResponse = await axios.get('http://localhost:5000/api/tasks', {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const organizedTasks = {
-        progress: tasksResponse.data.filter(task => task.status === 'In Progress'),
-        completed: tasksResponse.data.filter(task => task.status === 'Completed'),
-        tostart: tasksResponse.data.filter(task => task.status === 'To Start')
-      };
-      setTasks(organizedTasks);
-
-      setSuccess(true);
-      setTimeout(() => {
-        setSuccess(false);
-        onClose();
-        setTitle("");
-        setDescription("");
-        setDueDate("");
-        setPriority("Medium");
-        setErrors({});
-      }, 1500);
+      if (mode === 'edit') {
+        await api.put(`/task/${task._id}`, formData);
+      } else {
+        await api.post('/tasks', formData);
+      }
+      
+      await refreshTasks();
+      onClose();
     } catch (error) {
-      console.error("Error creating task:", error);
-      setErrors({ submit: "Failed to create task. Please try again." });
+      setSubmitError(
+        error.response?.data?.message || 
+        error.message || 
+        "Failed to save task"
+      );
+    } finally {
+      setIsSubmitting(false);
     }
+  };
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({ ...prev, [name]: value }));
   };
 
   return (
     <TaskFormContainer>
-      <h3>Create New Task</h3>
-      {success ? (
-        <SuccessMessage>✅ Task created successfully!</SuccessMessage>
-      ) : (
-        <form onSubmit={handleSubmit}>
-          {errors.submit && <ErrorText style={{ textAlign: 'center' }}>{errors.submit}</ErrorText>}
-          
-          <FormGroup>
-            <label>Task Title*</label>
-            <FormInput
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="Enter task title"
-              $hasError={!!errors.title}
-            />
-            {errors.title && <ErrorText>{errors.title}</ErrorText>}
-          </FormGroup>
-
-          <FormGroup>
-            <label>Description*</label>
-            <FormTextarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Enter task description"
-              rows="4"
-              $hasError={!!errors.description}
-            />
-            {errors.description && <ErrorText>{errors.description}</ErrorText>}
-          </FormGroup>
-
-          <FormGroup>
-            <label>Due Date*</label>
-            <FormInput
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-              $hasError={!!errors.dueDate}
-            />
-            {errors.dueDate && <ErrorText>{errors.dueDate}</ErrorText>}
-          </FormGroup>
-
-          <FormGroup>
-            <label>Priority</label>
-            <PriorityOptions>
-              <PriorityOption 
-                $active={priority === "High"}
-                onClick={() => setPriority("High")}
-              >
-                🔥 High
-              </PriorityOption>
-              <PriorityOption 
-                $active={priority === "Medium"}
-                onClick={() => setPriority("Medium")}
-              >
-                ⚡ Medium
-              </PriorityOption>
-              <PriorityOption 
-                $active={priority === "Low"}
-                onClick={() => setPriority("Low")}
-              >
-                💤 Low
-              </PriorityOption>
-            </PriorityOptions>
-          </FormGroup>
-
-          <FormActions>
-            <CancelButton type="button" onClick={onClose}>
-              Cancel
-            </CancelButton>
-            <SubmitButton type="submit">
-              Create Task
-            </SubmitButton>
-          </FormActions>
-        </form>
+      <h3>{mode === 'edit' ? 'Edit Task' : 'Create New Task'}</h3>
+      
+      {submitError && (
+        <ErrorText style={{ textAlign: 'center', marginBottom: '1rem' }}>
+          {submitError}
+        </ErrorText>
       )}
+
+      <form onSubmit={handleSubmit}>
+        <FormGroup>
+          <label>Task Title*</label>
+          <FormInput
+            type="text"
+            name="title"
+            value={formData.title}
+            onChange={handleChange}
+            placeholder="Enter task title"
+            $hasError={!!errors.title}
+          />
+          {errors.title && <ErrorText>{errors.title}</ErrorText>}
+        </FormGroup>
+
+        <FormGroup>
+          <label>Content*</label>
+          <FormTextarea
+            name="content"
+            value={formData.content}
+            onChange={handleChange}
+            placeholder="Enter task content"
+            rows="4"
+            $hasError={!!errors.content}
+          />
+          {errors.content && <ErrorText>{errors.content}</ErrorText>}
+        </FormGroup>
+
+        <FormGroup>
+          <label>Priority</label>
+          <PriorityOptions>
+            {['High', 'Medium', 'Low'].map((level) => (
+              <PriorityOption 
+                key={level}
+                $active={formData.priority === level}
+                onClick={() => setFormData(prev => ({ ...prev, priority: level }))}
+              >
+                {level === 'High' ? '🔥 High' : 
+                 level === 'Medium' ? '⚡ Medium' : '💤 Low'}
+              </PriorityOption>
+            ))}
+          </PriorityOptions>
+        </FormGroup>
+
+        {mode === 'edit' && (
+          <FormGroup>
+            <label>Status</label>
+            <StatusOptions>
+              {['Pending', 'In Progress', 'Completed'].map((status) => (
+                <StatusOption
+                  key={status}
+                  $active={formData.status === status}
+                  onClick={() => setFormData(prev => ({ ...prev, status }))}
+                >
+                  {status}
+                </StatusOption>
+              ))}
+            </StatusOptions>
+          </FormGroup>
+        )}
+
+        <FormActions>
+          <CancelButton type="button" onClick={onClose} disabled={isSubmitting}>
+            Cancel
+          </CancelButton>
+          <SubmitButton type="submit" disabled={isSubmitting}>
+            {isSubmitting ? 'Processing...' : 
+             mode === 'edit' ? 'Update Task' : 'Create Task'}
+          </SubmitButton>
+        </FormActions>
+      </form>
     </TaskFormContainer>
   );
 };
+
+
 
 // Styled Components
 const DashboardContainer = styled.div`
@@ -343,38 +503,6 @@ const DashboardContainer = styled.div`
   min-height: 100vh;
   background-color: #f5f7fa;
   padding: 20px;
-`;
-
-const HeaderWidget = styled.div`
-  background: linear-gradient(135deg, #0ef, #2c4766);
-  color: white;
-  padding: 1.5rem;
-  border-radius: 12px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 2rem;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-`;
-
-const WelcomeText = styled.h4`
-  margin: 0;
-  font-size: 1.5rem;
-`;
-
-const LogoutButton = styled.button`
-  background: rgba(255,255,255,0.2);
-  border: none;
-  color: white;
-  padding: 0.5rem 1rem;
-  border-radius: 6px;
-  cursor: pointer;
-  font-weight: 600;
-  transition: all 0.2s;
-
-  &:hover {
-    background: rgba(255,255,255,0.3);
-  }
 `;
 
 const BoardTitle = styled.div`
@@ -395,8 +523,9 @@ const BoardTitle = styled.div`
 
 const ButtonsContainer = styled.div`
   display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 1.5rem;
-  max-width: 600px;
+  max-width: 800px;
   margin: 0 auto;
 `;
 
@@ -404,20 +533,25 @@ const ActionButton = styled.button`
   background: ${props => props.color};
   color: white;
   border: none;
-  padding: 1.5rem;
-  border-radius: 12px;
-  font-size: 1.1rem;
+  padding: 0.8rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
   transition: all 0.2s;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
 
   &:hover {
-    transform: translateY(-3px);
-    box-shadow: 0 6px 8px rgba(0,0,0,0.15);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 6px rgba(0,0,0,0.15);
+  }
+
+  &:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
   }
 `;
 
@@ -436,12 +570,12 @@ const WidgetOverlay = styled.div`
 
 const WidgetPanel = styled.div`
   background: white;
-  border-radius: 16px;
+  border-radius: 12px;
   padding: 2rem;
   width: 90%;
-  max-width: 500px;
+  max-width: 600px;
   position: relative;
-  max-height: 80vh;
+  max-height: 90vh;
   overflow-y: auto;
   box-shadow: 0 10px 25px rgba(0,0,0,0.2);
 `;
@@ -455,6 +589,7 @@ const CloseButton = styled.button`
   font-size: 1.5rem;
   cursor: pointer;
   color: #666;
+  padding: 0.5rem;
 
   &:hover {
     color: #333;
@@ -465,67 +600,45 @@ const TaskListWidget = styled.div`
   h3 {
     color: #2c4766;
     margin-top: 0;
-  }
-
-  ul {
-    list-style: none;
-    padding: 0;
-    margin: 1.5rem 0 0;
+    margin-bottom: 1.5rem;
+    text-align: center;
   }
 `;
 
 const TaskItem = styled.li`
   padding: 1rem;
-  border-bottom: 1px solid #eee;
+  border-radius: 8px;
   margin-bottom: 1rem;
+  background: white;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+  border: 1px solid #eee;
 `;
 
 const TaskTitle = styled.h4`
   margin: 0 0 0.5rem;
   color: #2c4766;
+  font-size: 1.1rem;
 `;
 
-const TaskDescription = styled.p`
+const TaskContent = styled.p`
   margin: 0 0 0.5rem;
   color: #666;
+  font-size: 0.9rem;
 `;
 
-const TaskDue = styled.p`
-  margin: 0 0 0.5rem;
-  font-size: 0.9rem;
-  color: #888;
-`;
-
-const TaskPriority = styled.p`
-  margin: 0 0 0.5rem;
-  font-size: 0.9rem;
+const TaskMeta = styled.div`
+  display: flex;
+  gap: 1rem;
+  margin: 0.5rem 0;
+  font-size: 0.8rem;
   color: #888;
 `;
 
 const TaskActions = styled.div`
   display: flex;
   gap: 0.5rem;
-  margin-top: 0.5rem;
-`;
-
-const CompleteButton = styled.button`
-  background: #7bd389;
-  color: white;
-  border: none;
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.9rem;
-`;
-
-const DeleteButton = styled.button`
-  background: #ec7e7f;
-  color: white;
-  border: none;
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 0.9rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
 `;
 
 const TaskFormContainer = styled.div`
@@ -533,7 +646,49 @@ const TaskFormContainer = styled.div`
     color: #2c4766;
     margin-top: 0;
     margin-bottom: 1.5rem;
+    text-align: center;
   }
+`;
+
+const TaskDetailsContainer = styled.div`
+  h3 {
+    color: #2c4766;
+    margin-top: 0;
+    margin-bottom: 1.5rem;
+    text-align: center;
+  }
+`;
+
+const DetailGroup = styled.div`
+  margin-bottom: 1rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid #eee;
+`;
+
+const DetailLabel = styled.div`
+  font-weight: 600;
+  color: #555;
+  margin-bottom: 0.3rem;
+  font-size: 0.9rem;
+`;
+
+const DetailValue = styled.div`
+  color: #333;
+  font-size: 1rem;
+`;
+
+const DetailContent = styled.div`
+  color: #333;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+`;
+
+const DetailActions = styled.div`
+  display: flex;
+  gap: 0.8rem;
+  margin-top: 2rem;
+  flex-wrap: wrap;
 `;
 
 const FormGroup = styled.div`
@@ -544,6 +699,7 @@ const FormGroup = styled.div`
     margin-bottom: 0.5rem;
     font-weight: 500;
     color: #555;
+    font-size: 0.9rem;
   }
 `;
 
@@ -569,6 +725,7 @@ const FormTextarea = styled.textarea`
   font-size: 1rem;
   min-height: 100px;
   resize: vertical;
+  line-height: 1.5;
 
   &:focus {
     outline: none;
@@ -590,6 +747,30 @@ const PriorityOption = styled.div`
   color: ${props => props.$active ? 'white' : '#555'};
   transition: all 0.2s;
   font-weight: ${props => props.$active ? '600' : '400'};
+  flex: 1;
+  text-align: center;
+
+  &:hover {
+    background: ${props => props.$active ? '#1a365d' : '#e6e9ed'};
+  }
+`;
+
+const StatusOptions = styled.div`
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+`;
+
+const StatusOption = styled.div`
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  cursor: pointer;
+  background: ${props => props.$active ? '#2c4766' : '#f0f2f5'};
+  color: ${props => props.$active ? 'white' : '#555'};
+  transition: all 0.2s;
+  font-weight: ${props => props.$active ? '600' : '400'};
+  flex: 1;
+  text-align: center;
 
   &:hover {
     background: ${props => props.$active ? '#1a365d' : '#e6e9ed'};
@@ -600,6 +781,7 @@ const ErrorText = styled.small`
   color: #ff6b6b;
   display: block;
   margin-top: 0.25rem;
+  font-size: 0.8rem;
 `;
 
 const FormActions = styled.div`
@@ -622,6 +804,11 @@ const CancelButton = styled.button`
   &:hover {
     background: #e6e9ed;
   }
+
+  &:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+  }
 `;
 
 const SubmitButton = styled.button`
@@ -637,16 +824,25 @@ const SubmitButton = styled.button`
   &:hover {
     background: #1a365d;
   }
+
+  &:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+    background: #2c4766;
+  }
 `;
 
-const SuccessMessage = styled.div`
-  padding: 1rem;
-  background: #d4edda;
-  color: #155724;
-  border-radius: 6px;
+const LoadingMessage = styled.div`
+  padding: 2rem;
   text-align: center;
-  font-weight: 500;
-  margin-top: 1rem;
+  color: #666;
+`;
+
+const EmptyMessage = styled.div`
+  padding: 2rem;
+  text-align: center;
+  color: #888;
+  font-style: italic;
 `;
 
 export default Dashboard;
